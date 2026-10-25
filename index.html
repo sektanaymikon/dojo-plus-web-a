@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Dojo+ — CodeHS</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#090b12;color:#f3f5ff;font:16px system-ui,sans-serif}button,input{font:inherit}button{cursor:pointer;padding:10px 16px;border:1px solid #8999b6;border-radius:7px;background:#1c2a42;color:white}button:disabled{opacity:.5;cursor:wait}input{width:100%;padding:10px;border:1px solid #8999b6;border-radius:6px;background:#111b2d;color:white}main{max-width:730px;margin:6vh auto;padding:24px}h1{font-size:28px}p{line-height:1.55}label{display:block;margin:20px 0 8px}.actions{display:flex;gap:10px;margin-top:18px;flex-wrap:wrap}small{color:#b2bfd5}#setup{border:1px solid #44516c;border-radius:12px;background:#101724;padding:24px}#canvas{display:block;margin:auto;image-rendering:pixelated;max-width:100vw;max-height:100dvh;background:black;outline:none}#canvas:not(.active){width:640px;height:480px}#canvas.active{position:fixed;inset:0;margin:auto}#canvas.active~*{position:relative}body.running main{display:none}.toolbar{position:fixed;top:8px;right:8px;z-index:10;display:flex;gap:8px}.toolbar button{font-size:13px;background:#111b2de8}#loading{position:fixed;bottom:12px;left:12px;z-index:12;max-width:min(650px,95vw);background:#0b1322e8;padding:12px;border-radius:8px}#status{white-space:pre-wrap;overflow-wrap:anywhere}#progress{width:100%}[hidden]{display:none!important}#pauseMenuContainer{position:fixed;inset:0;background:#0009;display:grid;place-items:center;z-index:20}#pauseMenu{padding:28px;background:#111b2d;border:1px solid #8999b6;border-radius:8px}#output-container{position:fixed;bottom:8px;left:8px;right:8px;z-index:30}#output{width:100%;height:180px;background:#090d17;color:#bfe5ce;font:12px monospace;padding:10px}#message-container{position:fixed;top:55px;left:12px;z-index:25;background:#111b2d;padding:12px;display:none}
+
+.toolbar{flex-wrap:wrap;max-width:calc(100vw - 16px)}#saveDialog{color:#f3f5ff;background:#101724;border:1px solid #8999b6;border-radius:12px;max-width:min(620px,94vw);max-height:88dvh;padding:24px;overflow:auto}#saveDialog::backdrop{background:#000b}#saveDialog h2{margin-top:0}#saveDialog .actions{gap:8px}#saveMessage{white-space:pre-wrap;overflow-wrap:anywhere}#saveList{max-height:220px;overflow:auto;padding-left:24px;font:14px monospace}#saveDialog button{margin:3px}
+</style></head><body>
+<main><h1>Dojo+</h1><p>Chapter 5 · mod v0.1.2 · game build 0.0.253</p><section id="setup"><p>Dojo+ v0.1.2: visit BigDawg Joe in Top Bakery and choose Fight → Bullet Hell. This browser build is under testing.</p><p>Play the Chapter 5 mod here in your browser. The game downloads automatically when you press Play.</p><div class="actions"><button id="start">Play</button></div><p><small>The first load downloads approximately 161 MB of compressed game data, plus the runtime. The browser expands the game automatically. Keep the page open while it loads. Use English. Arrows to move, Z / Enter to confirm, X / Shift to cancel, C / Ctrl for the menu.</small></p></section><p id="setupStatus" role="status"></p><p><small>Mod: Y114. Original game: Toby Fox and contributors. Browser base: ByAlvaro19, with original ports credited to bog. <a href="https://gamebanana.com/mods/730367">Mod page</a> · <a href="https://github.com/ByAlvaro19/deltarune">Web runner repository</a></small></p></main>
+
+<dialog id="saveDialog" aria-labelledby="saveHeading"><h2 id="saveHeading">Import / export save</h2><p id="saveMessage" role="status"></p><input type="file" id="saveFile" accept=".data,application/json" hidden><div class="actions"><button id="chooseSave" type="button">Choose .data file</button><button id="exportSave" type="button">Export current save</button><button id="exportBackup" type="button">Export previous backup</button></div><ul id="saveList"></ul><div class="actions"><button id="applySave" type="button" disabled>Import listed save files</button><button id="closeSaves" type="button">Close</button></div></dialog>
+
+<canvas id="canvas" width="640" height="480" tabindex="0" oncontextmenu="event.preventDefault()"></canvas>
+<div class="toolbar"><button id="openSaves" type="button">Import / export save</button><button id="full">Fullscreen</button><button id="showLog">Show log</button></div>
+<div id="loading" hidden><div id="spinner">Loading…</div><div id="status" role="status">Preparing…</div><progress id="progress" hidden></progress></div>
+<div id="pauseMenuContainer" hidden><div id="pauseMenu"><button id="resumeButton" onclick="resume()">Resume</button><button id="quitButton" hidden>Quit</button></div></div>
+<div id="output-container" hidden><textarea id="output" readonly aria-label="Game log"></textarea></div><div id="message-container"><div id="messages"></div></div>
+<script>
+// Compatibility for this pinned GameMaker WASM runner. No track selection changes.
+(() => {
+ 'use strict';
+ const expectedHash='956fcd252073d68454238006d03c121becc9e850b4d40f0f9dd930ed9563fb9b';
+ const attached=new WeakSet();let ready=null;
+ function typedCallback(callback){
+  const section=(id,data)=>[id,data.length,...data];
+  const type=[1,96,5,127,127,127,127,127,0],imports=[1,1,101,1,102,0,0],exports=[1,1,102,0,0];
+  const module=new WebAssembly.Module(new Uint8Array([0,97,115,109,1,0,0,0,...section(1,type),...section(2,imports),...section(7,exports)]));
+  return new WebAssembly.Instance(module,{e:{f:callback}}).exports.f;
+ }
+ async function hash(bytes){if(!bytes||!crypto.subtle)return null;return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes)),n=>n.toString(16).padStart(2,'0')).join('');}
+ function install(result,fingerprint){
+  const instance=result.instance||result;if(!instance?.exports||attached.has(instance))return result;
+  const memory=Object.values(instance.exports).find(x=>x instanceof WebAssembly.Memory),table=Object.values(instance.exports).find(x=>x instanceof WebAssembly.Table);
+  if(!memory||!table)return result;
+  if(fingerprint!==expectedHash||table.length!==5691){console.warn('[music] Runner fingerprint differs; compatibility hook was not applied.');return result;}
+  const slots={play:1417,stop:1421,create:1501,destroy:1502,stopAll:1446},native={};
+  for(const [key,index] of Object.entries(slots)){native[key]=table.get(index);if(native[key]?.length!==5){console.warn('[music] Unexpected native audio signature; compatibility hook was not applied.');return result;}}
+  attached.add(instance);
+  const streams=new Map(),voices=new Map();
+  const allocate=instance.exports.Sh,scratch=allocate(64),cancelled=new Set();
+  function builtin(name,argc){
+   const bytes=new Uint8Array(memory.buffer,0,Math.min(2097152,memory.buffer.byteLength)),words=new Uint32Array(memory.buffer),pattern=new TextEncoder().encode(name+'\0');
+   for(let p=bytes.indexOf(pattern[0]);p>=0;p=bytes.indexOf(pattern[0],p+1)){
+    if(!pattern.every((value,i)=>bytes[p+i]===value))continue;
+    for(let w=words.indexOf(p);w>=0;w=words.indexOf(p,w+1)){const index=words[w+1];if(index>=1400&&index<1600&&words[w+2]===argc&&table.get(index)?.length===5)return {index,callback:table.get(index)};}
+   }
+   return null;
+  }
+  const gain=builtin('audio_sound_gain',3),getGain=builtin('audio_sound_get_gain',1),music=new Map(),musicVoices=new Map();
+  function numericCall(callback,values){
+   const d=new DataView(memory.buffer);for(let i=0;i<values.length;i++){const p=scratch+16+i*16;d.setFloat64(p,values[i],true);d.setInt32(p+8,0,true);d.setInt32(p+12,0,true);}
+   callback(scratch,0,0,values.length,scratch+16);return number(scratch);
+  }
+  function string(pointer){
+   try{const d=new DataView(memory.buffer);if(d.getInt32(pointer+12,true)!==1)return '';const ref=d.getUint32(pointer,true),start=d.getUint32(ref,true),length=Math.min(d.getUint32(ref+8,true),1024);return new TextDecoder().decode(new Uint8Array(memory.buffer,start,length)).toLowerCase();}catch(_){return '';}
+  }
+  function silenceDefaultMusic(){
+   if(!gain)return;
+   for(const [asset,record] of music){if(!record.generic)continue;record.suppressed=true;
+    numericCall(gain.callback,[asset,0,0]);
+    for(const voice of record.voices){numericCall(gain.callback,[voice,0,0]);numericCall(native.stop,[voice]);cancelPendingVoice(voice);}
+    console.log('[music] Boss theme selected; default battle stream '+asset+' is muted and cancelled.');
+   }
+  }
+  if(gain)table.set(gain.index,typedCallback((...args)=>{
+   const handle=number(args[4]),record=music.get(handle)||musicVoices.get(handle);
+   if(!record?.generic){gain.callback(...args);return;}
+   record.desiredGain=number(args[4]+16);
+   if(!record.suppressed){gain.callback(...args);return;}
+   const pointer=args[4]+16,saved=new Uint8Array(memory.buffer,pointer,16).slice();
+   try{const d=new DataView(memory.buffer);d.setFloat64(pointer,0,true);d.setInt32(pointer+8,0,true);d.setInt32(pointer+12,0,true);gain.callback(...args);}
+   finally{new Uint8Array(memory.buffer,pointer,16).set(saved);}
+  }));
+  function stopCancelledVoice(voice){
+   const record=musicVoices.get(voice);if(gain&&record?.suppressed&&music.get(record.asset)===record){numericCall(gain.callback,[record.asset,0,0]);numericCall(gain.callback,[voice,0,0]);}
+   const d=new DataView(memory.buffer);d.setFloat64(scratch+16,voice,true);d.setInt32(scratch+24,0,true);d.setInt32(scratch+28,0,true);
+   native.stop(scratch,0,0,1,scratch+16);
+  }
+  function cancelPendingVoice(voice){
+   cancelled.add(voice);
+   // Streaming downloads complete asynchronously. The runner can start a voice
+   // after its original stop call; repeat that same stop after loading finishes.
+   for(const delay of [0,50,200,500,1000,2500,5000,10000])setTimeout(()=>stopCancelledVoice(voice),delay);
+  }
+  window.finishCancelledMusicDownloads=()=>{
+   for(const voice of cancelled)for(const delay of [0,50,200,500,1000])setTimeout(()=>stopCancelledVoice(voice),delay);
+  };
+  function number(pointer){if(!pointer||pointer+16>memory.buffer.byteLength)return NaN;const d=new DataView(memory.buffer),type=d.getInt32(pointer+12,true);if(type===0||type===13)return d.getFloat64(pointer,true);if(type===7)return d.getInt32(pointer,true);if(type===10)return Number(d.getBigInt64(pointer,true));return NaN;}
+  function forget(voice){const stream=voices.get(voice);if(stream!==undefined)streams.get(stream)?.delete(voice);voices.delete(voice);}
+  function stopVoice(voice,args){
+   const pointer=args[4];if(!pointer||args[3]<1)return;
+   const saved=new Uint8Array(memory.buffer,pointer,16).slice();
+   try{const d=new DataView(memory.buffer);d.setFloat64(pointer,voice,true);d.setInt32(pointer+8,0,true);d.setInt32(pointer+12,0,true);native.stop(...args);}
+   finally{new Uint8Array(memory.buffer,pointer,16).set(saved);cancelPendingVoice(voice);forget(voice);}
+  }
+  table.set(slots.create,typedCallback((...args)=>{const name=string(args[4]);native.create(...args);const asset=number(args[0]);if(Number.isFinite(asset)&&asset>=0){streams.set(asset,new Set());music.set(asset,{asset,name,generic:/(?:^|\/)(?:rakuichi_buster_wip|battle)\.ogg$/.test(name),suppressed:false,desiredGain:1,voices:new Set()});}}));
+  table.set(slots.play,typedCallback((...args)=>{
+   const asset=number(args[4]),record=music.get(asset),priority=number(args[4]+16);
+   if(record?.generic&&record.suppressed&&gain){record.suppressed=false;numericCall(gain.callback,[asset,Number.isFinite(record.desiredGain)?record.desiredGain:1,0]);}
+   else if(record&&!record.generic&&priority>=80)silenceDefaultMusic();
+   native.play(...args);const voice=number(args[0]);
+   if(streams.has(asset)&&Number.isFinite(voice)&&voice>=0){streams.get(asset).add(voice);voices.set(voice,asset);record?.voices.add(voice);if(record)musicVoices.set(voice,record);}
+  }));
+  table.set(slots.stop,typedCallback((...args)=>{
+   const handle=number(args[4]);native.stop(...args);
+   if(voices.has(handle)){cancelPendingVoice(handle);forget(handle);}
+   else if(streams.has(handle))for(const voice of [...streams.get(handle)])stopVoice(voice,args);
+  }));
+  table.set(slots.destroy,typedCallback((...args)=>{
+   const asset=number(args[4]),active=[...(streams.get(asset)||[])];
+   for(const voice of active)stopVoice(voice,args);
+   native.destroy(...args);streams.delete(asset);const record=music.get(asset);if(record)for(const voice of record.voices)musicVoices.delete(voice);music.delete(asset);
+   if(active.length)console.log('[music] Released stream '+asset+' after stopping '+active.length+' tracked voice(s).');
+  }));
+  table.set(slots.stopAll,typedCallback((...args)=>{native.stopAll(...args);for(const voice of voices.keys())cancelPendingVoice(voice);voices.clear();for(const set of streams.values())set.clear();}));
+  console.log('[music] Voice cleanup installed. Original play arguments and track filenames are preserved.');
+  console.log(gain?'[music] Boss music guard v2 installed (gain callback '+gain.index+').':'[music] Boss music guard unavailable: native gain callback not found.');
+  window.getGameMusicState=()=>[...music].map(([asset,record])=>({asset,name:record.name,generic:record.generic,suppressed:record.suppressed,gain:getGain?numericCall(getGain.callback,[asset]):null,voices:[...record.voices]}));
+  return result;
+ }
+ function attach(result,fingerprint){const instance=result.instance||result;if(instance?.exports&&Object.values(instance.exports).some(x=>x instanceof WebAssembly.Table)&&fingerprint===expectedHash)ready={result,fingerprint};return result;}
+ window.installGameMusicCleanup=()=>{if(ready)install(ready.result,ready.fingerprint);};
+ const instantiate=WebAssembly.instantiate;
+ WebAssembly.instantiate=async function(bytes,imports){const fingerprint=bytes instanceof WebAssembly.Module?null:hash(bytes);const result=await instantiate.call(this,bytes,imports);return attach(result,await fingerprint);};
+ const streaming=WebAssembly.instantiateStreaming;
+ if(streaming)WebAssembly.instantiateStreaming=async function(response,imports){const resolved=await response;const fingerprint=hash(await resolved.clone().arrayBuffer());const result=await streaming.call(this,resolved,imports);return attach(result,await fingerprint);};
+})();
+
+</script><script>
+'use strict';
+const PINNED_ASSET_BASE="https://cdn.jsdelivr.net/gh/ByAlvaro19/deltarune@125c727d07732276d3c6677227ddfa07d5221c72/chapter5/",ASSET_MAP={"splitdatawin.py":"Splitdatawin.py","audio-worklet.js":"audio-worklet.js","audio_intronoise.ogg":"audio_intronoise.ogg","fnames":"fnames","game.unx.part1":"game.unx.part1","game.unx.part10":"game.unx.part10","game.unx.part2":"game.unx.part2","game.unx.part3":"game.unx.part3","game.unx.part4":"game.unx.part4","game.unx.part5":"game.unx.part5","game.unx.part6":"game.unx.part6","game.unx.part7":"game.unx.part7","game.unx.part8":"game.unx.part8","game.unx.part9":"game.unx.part9","index.html":"index.html","index.js":"index.js","mus/4rd_sanctuary.ogg":"mus/4rd_sanctuary.ogg","mus/4rd_sanctuary_noguit.ogg":"mus/4rd_sanctuary_noguit.ogg","mus/audio_anotherhim.ogg":"mus/AUDIO_ANOTHERHIM.ogg","mus/audio_darkness.ogg":"mus/AUDIO_DARKNESS.ogg","mus/audio_defeat.ogg":"mus/AUDIO_DEFEAT.ogg","mus/audio_drone.ogg":"mus/AUDIO_DRONE.ogg","mus/audio_story.ogg":"mus/AUDIO_STORY.ogg","mus/flowerman_arrangement.ogg":"mus/Flowerman_Arrangement.ogg","mus/gallery.ogg":"mus/GALLERY.ogg","mus/keygen.ogg":"mus/KEYGEN.ogg","mus/the_holy.ogg":"mus/THE_HOLY.ogg","mus/tv_game.ogg":"mus/TV_GAME.ogg","mus/acid_tunnel.ogg":"mus/acid_tunnel.ogg","mus/afterrain_inside.ogg":"mus/afterrain_inside.ogg","mus/alarm_titlescreen.ogg":"mus/alarm_titlescreen.ogg","mus/alley_ambience.ogg":"mus/alley_ambience.ogg","mus/alt_church_lobby.ogg":"mus/alt_church_lobby.ogg","mus/ambientwater_weird.ogg":"mus/ambientwater_weird.ogg","mus/annoying_prophecy.ogg":"mus/annoying_prophecy.ogg","mus/april_2012.ogg":"mus/april_2012.ogg","mus/asgore_conspiracy.ogg":"mus/asgore_conspiracy.ogg","mus/asgore_serious.ogg":"mus/asgore_serious.ogg","mus/asgore_serious_drum_only_flowery_version.ogg":"mus/asgore_serious_drum_only_flowery_version.ogg","mus/asgore_serious_drum_only_low.ogg":"mus/asgore_serious_drum_only_low.ogg","mus/baci_distort.ogg":"mus/baci_distort.ogg","mus/baci_perugina.ogg":"mus/baci_perugina.ogg","mus/basement.ogg":"mus/basement.ogg","mus/battle.ogg":"mus/battle.ogg","mus/battle_preview.ogg":"mus/battle_preview.ogg","mus/battle_preview_crisp.ogg":"mus/battle_preview_crisp.ogg","mus/battle_vapor.ogg":"mus/battle_vapor.ogg","mus/bell_ambience.ogg":"mus/bell_ambience.ogg","mus/berdly_audience.ogg":"mus/berdly_audience.ogg","mus/berdly_battle_heartbeat_true.ogg":"mus/berdly_battle_heartbeat_true.ogg","mus/berdly_chase.ogg":"mus/berdly_chase.ogg","mus/berdly_descend.ogg":"mus/berdly_descend.ogg","mus/berdly_flashback.ogg":"mus/berdly_flashback.ogg","mus/berdly_theme.ogg":"mus/berdly_theme.ogg","mus/bird.ogg":"mus/bird.ogg","mus/birds_ch5.ogg":"mus/birds_ch5.ogg","mus/blue_flower.ogg":"mus/blue_flower.ogg","mus/board4_rhythm.ogg":"mus/board4_rhythm.ogg","mus/board_4.ogg":"mus/board_4.ogg","mus/board_4_challenge.ogg":"mus/board_4_challenge.ogg","mus/board_lancer_dig.ogg":"mus/board_lancer_dig.ogg","mus/board_ocean.ogg":"mus/board_ocean.ogg","mus/board_sword_music.ogg":"mus/board_sword_music.ogg","mus/board_zelda.ogg":"mus/board_zelda.ogg","mus/boxing_boss.ogg":"mus/boxing_boss.ogg","mus/boxing_boss_preview.ogg":"mus/boxing_boss_preview.ogg","mus/boxing_boss_preview_crisp.ogg":"mus/boxing_boss_preview_crisp.ogg","mus/boxing_game.ogg":"mus/boxing_game.ogg","mus/bratty_confession.ogg":"mus/bratty_confession.ogg","mus/card_castle.ogg":"mus/card_castle.ogg","mus/carol_appeared.ogg":"mus/carol_appeared.ogg","mus/castle_foyer.ogg":"mus/castle_foyer.ogg","mus/castle_funk_long.ogg":"mus/castle_funk_long.ogg","mus/castle_intro.ogg":"mus/castle_intro.ogg","mus/castle_loop.ogg":"mus/castle_loop.ogg","mus/castle_top.ogg":"mus/castle_top.ogg","mus/castletown.ogg":"mus/castletown.ogg","mus/castletown_empty.ogg":"mus/castletown_empty.ogg","mus/catti_confession.ogg":"mus/catti_confession.ogg","mus/ch2_credits.ogg":"mus/ch2_credits.ogg","mus/ch3-practice_song_combined.ogg":"mus/ch3-practice_song_combined.ogg","mus/ch3-practice_song_noguit.ogg":"mus/ch3-practice_song_noguit.ogg","mus/ch3_board1.ogg":"mus/ch3_board1.ogg","mus/ch3_board2.ogg":"mus/ch3_board2.ogg","mus/ch3_board3.ogg":"mus/ch3_board3.ogg","mus/ch3_karaoke_example_guit_only.ogg":"mus/ch3_karaoke_example_guit_only.ogg","mus/ch3_karaoke_example_guitar_only_v2.ogg":"mus/ch3_karaoke_example_guitar_only_v2.ogg","mus/ch3_karaoke_example_noguit.ogg":"mus/ch3_karaoke_example_noguit.ogg","mus/ch3_karaoke_example_noguitar_v2.ogg":"mus/ch3_karaoke_example_noguitar_v2.ogg","mus/ch3_karaoke_example_together_ex.ogg":"mus/ch3_karaoke_example_together_ex.ogg","mus/ch3_karaoke_full.ogg":"mus/ch3_karaoke_full.ogg","mus/ch3_karaoke_no_guitar.ogg":"mus/ch3_karaoke_no_guitar.ogg","mus/ch3_karaoke_preview.ogg":"mus/ch3_karaoke_preview.ogg","mus/ch3_karaoke_preview_crisp.ogg":"mus/ch3_karaoke_preview_crisp.ogg","mus/ch3_south_of_the_border.ogg":"mus/ch3_south_of_the_border.ogg","mus/ch3_tvtime.ogg":"mus/ch3_tvtime.ogg","mus/ch3_tvtime_guitar.ogg":"mus/ch3_tvtime_guitar.ogg","mus/ch4_battle.ogg":"mus/ch4_battle.ogg","mus/ch4_credits.ogg":"mus/ch4_credits.ogg","mus/ch4_extra_boss.ogg":"mus/ch4_extra_boss.ogg","mus/ch4_first_intro.ogg":"mus/ch4_first_intro.ogg","mus/ch4_first_intro_breaking.ogg":"mus/ch4_first_intro_breaking.ogg","mus/ch5_credits.ogg":"mus/ch5_credits.ogg","mus/ch5_intro_audio.ogg":"mus/ch5_intro_audio.ogg","mus/ch5_inversion_lake_chant.ogg":"mus/ch5_inversion_lake_chant.ogg","mus/ch5_weird_monologue.ogg":"mus/ch5_weird_monologue.ogg","mus/ch5_weird_monologue_deep.ogg":"mus/ch5_weird_monologue_deep.ogg","mus/charjoined.ogg":"mus/charjoined.ogg","mus/checkers.ogg":"mus/checkers.ogg","mus/church_dark_study.ogg":"mus/church_dark_study.ogg","mus/church_hymn.ogg":"mus/church_hymn.ogg","mus/church_lightning.ogg":"mus/church_lightning.ogg","mus/church_lw.ogg":"mus/church_lw.ogg","mus/church_lw_night.ogg":"mus/church_lw_night.ogg","mus/church_wip.ogg":"mus/church_wip.ogg","mus/church_zone2_alt_longer_test.ogg":"mus/church_zone2_alt_longer_test.ogg","mus/church_zone3.ogg":"mus/church_zone3.ogg","mus/cliff.ogg":"mus/cliff.ogg","mus/cliff_jump_ambience.ogg":"mus/cliff_jump_ambience.ogg","mus/cliff_jump_ambience_nowind.ogg":"mus/cliff_jump_ambience_nowind.ogg","mus/climb.ogg":"mus/climb.ogg","mus/coolbeat.ogg":"mus/coolbeat.ogg","mus/cowboy_song.ogg":"mus/cowboy_song.ogg","mus/creepychase.ogg":"mus/creepychase.ogg","mus/creepydoor.ogg":"mus/creepydoor.ogg","mus/creepylandscape.ogg":"mus/creepylandscape.ogg","mus/cyber.ogg":"mus/cyber.ogg","mus/cyber_battle.ogg":"mus/cyber_battle.ogg","mus/cyber_battle_end.ogg":"mus/cyber_battle_end.ogg","mus/cyber_battle_prelude.ogg":"mus/cyber_battle_prelude.ogg","mus/cyber_shop.ogg":"mus/cyber_shop.ogg","mus/cybercity.ogg":"mus/cybercity.ogg","mus/cybercity_alt.ogg":"mus/cybercity_alt.ogg","mus/cybercity_old.ogg":"mus/cybercity_old.ogg","mus/cyberhouse.ogg":"mus/cyberhouse.ogg","mus/cybershop_christmas.ogg":"mus/cybershop_christmas.ogg","mus/d.ogg":"mus/d.ogg","mus/dark_place.ogg":"mus/dark_place.ogg","mus/darkchurch_intro.ogg":"mus/darkchurch_intro.ogg","mus/deep_noise.ogg":"mus/deep_noise.ogg","mus/deltarune_logo_ch5_itoki.ogg":"mus/deltarune_logo_ch5_itoki.ogg","mus/deltarune_piano_collections_by_trevor_alan_gomes.ogg":"mus/deltarune_piano_collections_by_trevor_alan_gomes.ogg","mus/dog_balloon.ogg":"mus/dog_balloon.ogg","mus/dogcheck.ogg":"mus/dogcheck.ogg","mus/dogroom.ogg":"mus/dogroom.ogg","mus/dontforget.ogg":"mus/dontforget.ogg","mus/elevator.ogg":"mus/elevator.ogg","mus/fanfare.ogg":"mus/fanfare.ogg","mus/festival.ogg":"mus/festival.ogg","mus/festival_after.ogg":"mus/festival_after.ogg","mus/festival_night.ogg":"mus/festival_night.ogg","mus/field_of_hopes.ogg":"mus/field_of_hopes.ogg","mus/field_of_hopes_insaneintherain_intro.ogg":"mus/field_of_hopes_insaneintherain_intro.ogg","mus/field_of_hopes_insaneintherain_loop.ogg":"mus/field_of_hopes_insaneintherain_loop.ogg","mus/field_of_hopes_preview.ogg":"mus/field_of_hopes_preview.ogg","mus/field_of_hopes_preview_crisp.ogg":"mus/field_of_hopes_preview_crisp.ogg","mus/findher.ogg":"mus/findher.ogg","mus/flashback_excerpt.ogg":"mus/flashback_excerpt.ogg","mus/flower_cafe.ogg":"mus/flower_cafe.ogg","mus/flower_castle.ogg":"mus/flower_castle.ogg","mus/flowery.ogg":"mus/flowery.ogg","mus/flowery_diner_romantic.ogg":"mus/flowery_diner_romantic.ogg","mus/flowery_iog.ogg":"mus/flowery_iog.ogg","mus/flowery_iog_extended.ogg":"mus/flowery_iog_extended.ogg","mus/flowery_sad.ogg":"mus/flowery_sad.ogg","mus/flowery_skateboard.ogg":"mus/flowery_skateboard.ogg","mus/forest.ogg":"mus/forest.ogg","mus/friendship.ogg":"mus/friendship.ogg","mus/gameover_short.ogg":"mus/gameover_short.ogg","mus/gerson_defeated.ogg":"mus/gerson_defeated.ogg","mus/gerson_theme_intro.ogg":"mus/gerson_theme_intro.ogg","mus/gerson_theme_nointro.ogg":"mus/gerson_theme_nointro.ogg","mus/giant_queen_appears.ogg":"mus/giant_queen_appears.ogg","mus/gigaqueen_pre.ogg":"mus/gigaqueen_pre.ogg","mus/glacier.ogg":"mus/glacier.ogg","mus/greenroom_detune.ogg":"mus/greenroom_detune.ogg","mus/happy_town.ogg":"mus/happy_town.ogg","mus/heartbeat.ogg":"mus/heartbeat.ogg","mus/hip_shop.ogg":"mus/hip_shop.ogg","mus/home.ogg":"mus/home.ogg","mus/honksong.ogg":"mus/honksong.ogg","mus/inappropriate_recycling.ogg":"mus/inappropriate_recycling.ogg","mus/inukuma_wip.ogg":"mus/inukuma_wip.ogg","mus/jitterbug.ogg":"mus/jitterbug.ogg","mus/jitterbug_muffled.ogg":"mus/jitterbug_muffled.ogg","mus/joker.ogg":"mus/joker.ogg","mus/kikky_upgrade.ogg":"mus/kikky_upgrade.ogg","mus/kingboss.ogg":"mus/kingboss.ogg","mus/knight.ogg":"mus/knight.ogg","mus/knight_appears.ogg":"mus/knight_appears.ogg","mus/kris_piano_lancer_waltz.ogg":"mus/kris_piano_lancer_waltz.ogg","mus/kris_piano_last_prophecy.ogg":"mus/kris_piano_last_prophecy.ogg","mus/kris_piano_lower.ogg":"mus/kris_piano_lower.ogg","mus/kris_piano_prophecy.ogg":"mus/kris_piano_prophecy.ogg","mus/kris_piano_quiz.ogg":"mus/kris_piano_quiz.ogg","mus/kris_piano_rouxls.ogg":"mus/kris_piano_rouxls.ogg","mus/kris_piano_sevenfour.ogg":"mus/kris_piano_sevenfour.ogg","mus/kris_piano_shop.ogg":"mus/kris_piano_shop.ogg","mus/kris_piano_waitingroom.ogg":"mus/kris_piano_waitingroom.ogg","mus/lancer.ogg":"mus/lancer.ogg","mus/lancer_annoying.ogg":"mus/lancer_annoying.ogg","mus/lancer_susie.ogg":"mus/lancer_susie.ogg","mus/lancerfight.ogg":"mus/lancerfight.ogg","mus/legend.ogg":"mus/legend.ogg","mus/legend_altered.ogg":"mus/legend_altered.ogg","mus/man.ogg":"mus/man.ogg","mus/man_2.ogg":"mus/man_2.ogg","mus/man_nes.ogg":"mus/man_nes.ogg","mus/mansion.ogg":"mus/mansion.ogg","mus/mansion_entrance.ogg":"mus/mansion_entrance.ogg","mus/me.ogg":"mus/me.ogg","mus/meeting_flower.ogg":"mus/meeting_flower.ogg","mus/meeting_flower_cowboy.ogg":"mus/meeting_flower_cowboy.ogg","mus/meeting_flower_orange.ogg":"mus/meeting_flower_orange.ogg","mus/meeting_flower_orange_highpitch.ogg":"mus/meeting_flower_orange_highpitch.ogg","mus/meeting_flower_upbeat_drum.ogg":"mus/meeting_flower_upbeat_drum.ogg","mus/menu.ogg":"mus/menu.ogg","mus/mike.ogg":"mus/mike.ogg","mus/mike_zone.ogg":"mus/mike_zone.ogg","mus/miniboss_new_section_idea_wip.ogg":"mus/miniboss_new_section_idea_wip.ogg","mus/minigame_kart.ogg":"mus/minigame_kart.ogg","mus/muffled_rain.ogg":"mus/muffled_rain.ogg","mus/mus_birdnoise.ogg":"mus/mus_birdnoise.ogg","mus/mus_confession.ogg":"mus/mus_confession.ogg","mus/mus_date_fight.ogg":"mus/mus_date_fight.ogg","mus/mus_date_tense.ogg":"mus/mus_date_tense.ogg","mus/mus_introcar.ogg":"mus/mus_introcar.ogg","mus/mus_knightthought.ogg":"mus/mus_knightthought.ogg","mus/mus_race.ogg":"mus/mus_race.ogg","mus/mus_school.ogg":"mus/mus_school.ogg","mus/mus_temloopshort.ogg":"mus/mus_temloopshort.ogg","mus/muscle.ogg":"mus/muscle.ogg","mus/music_guys.ogg":"mus/music_guys.ogg","mus/music_guys_intro.ogg":"mus/music_guys_intro.ogg","mus/napsta_alarm.ogg":"mus/napsta_alarm.ogg","mus/nes_intro_extended_part2.ogg":"mus/nes_intro_extended_part2.ogg","mus/newscast.ogg":"mus/newscast.ogg","mus/night_ambience.ogg":"mus/night_ambience.ogg","mus/nightmare_boss_heavy.ogg":"mus/nightmare_boss_heavy.ogg","mus/nightmare_boss_links.ogg":"mus/nightmare_boss_links.ogg","mus/nightmare_nes.ogg":"mus/nightmare_nes.ogg","mus/noelle.ogg":"mus/noelle.ogg","mus/noelle_distant.ogg":"mus/noelle_distant.ogg","mus/noelle_ferriswheel.ogg":"mus/noelle_ferriswheel.ogg","mus/noelle_house_wip.ogg":"mus/noelle_house_wip.ogg","mus/noelle_normal.ogg":"mus/noelle_normal.ogg","mus/noelle_school.ogg":"mus/noelle_school.ogg","mus/noelleshouseoutside.ogg":"mus/noelleshouseoutside.ogg","mus/northernlight.ogg":"mus/northernlight.ogg","mus/ocean.ogg":"mus/ocean.ogg","mus/oldman_helps_out.ogg":"mus/oldman_helps_out.ogg","mus/ominous_message.ogg":"mus/ominous_message.ogg","mus/ominous_stab_harsh.ogg":"mus/ominous_stab_harsh.ogg","mus/ominous_stab_harsh_2.ogg":"mus/ominous_stab_harsh_2.ogg","mus/ominous_worse.ogg":"mus/ominous_worse.ogg","mus/piano_ambience.ogg":"mus/piano_ambience.ogg","mus/pianpian.ogg":"mus/pianpian.ogg","mus/pink.ogg":"mus/pink.ogg","mus/pink_theme.ogg":"mus/pink_theme.ogg","mus/pink_theme_mad.ogg":"mus/pink_theme_mad.ogg","mus/pirate_zone.ogg":"mus/pirate_zone.ogg","mus/prejoker.ogg":"mus/prejoker.ogg","mus/pumpkin_boss.ogg":"mus/pumpkin_boss.ogg","mus/queen.ogg":"mus/queen.ogg","mus/queen_boss.ogg":"mus/queen_boss.ogg","mus/queen_car_radio.ogg":"mus/queen_car_radio.ogg","mus/queen_intro.ogg":"mus/queen_intro.ogg","mus/quiet_autumn.ogg":"mus/quiet_autumn.ogg","mus/quiet_church.ogg":"mus/quiet_church.ogg","mus/rain.ogg":"mus/rain.ogg","mus/raining.ogg":"mus/raining.ogg","mus/raining_in_church2.ogg":"mus/raining_in_church2.ogg","mus/rakuichi_buster_wip.ogg":"mus/rakuichi_buster_wip.ogg","mus/rhythm_3rd_sanctuary_guit.ogg":"mus/rhythm_3rd_sanctuary_guit.ogg","mus/rhythm_3rd_sanctuary_noguit.ogg":"mus/rhythm_3rd_sanctuary_noguit.ogg","mus/rhythm_knockdown_combined.ogg":"mus/rhythm_knockdown_combined.ogg","mus/rhythm_knockdown_no_guit.ogg":"mus/rhythm_knockdown_no_guit.ogg","mus/root_8bit.ogg":"mus/root_8bit.ogg","mus/rouxls_battle.ogg":"mus/rouxls_battle.ogg","mus/rtenna_zoom.ogg":"mus/rtenna_zoom.ogg","mus/rudebuster_boss.ogg":"mus/rudebuster_boss.ogg","mus/running_water.ogg":"mus/running_water.ogg","mus/ruruskaado.ogg":"mus/ruruskaado.ogg","mus/s_neo.ogg":"mus/s_neo.ogg","mus/s_neo_clip.ogg":"mus/s_neo_clip.ogg","mus/sadchord2.ogg":"mus/sadchord2.ogg","mus/second_church.ogg":"mus/second_church.ogg","mus/shinkansen.ogg":"mus/shinkansen.ogg","mus/shop1.ogg":"mus/shop1.ogg","mus/shop_3.ogg":"mus/shop_3.ogg","mus/silly_printer.ogg":"mus/silly_printer.ogg","mus/sinedrone_danger.ogg":"mus/sinedrone_danger.ogg","mus/sinedrone_danger_high.ogg":"mus/sinedrone_danger_high.ogg","mus/sink_noise.ogg":"mus/sink_noise.ogg","mus/smallpiano_room.ogg":"mus/smallpiano_room.ogg","mus/sound_battle_bg.ogg":"mus/sound_battle_bg.ogg","mus/spamton_basement.ogg":"mus/spamton_basement.ogg","mus/spamton_battle.ogg":"mus/spamton_battle.ogg","mus/spamton_dance.ogg":"mus/spamton_dance.ogg","mus/spamton_happy.ogg":"mus/spamton_happy.ogg","mus/spamton_house.ogg":"mus/spamton_house.ogg","mus/spamton_laugh_noise.ogg":"mus/spamton_laugh_noise.ogg","mus/spamton_meeting.ogg":"mus/spamton_meeting.ogg","mus/spamton_meeting_intro.ogg":"mus/spamton_meeting_intro.ogg","mus/spamton_neo_after.ogg":"mus/spamton_neo_after.ogg","mus/spamton_neo_meeting.ogg":"mus/spamton_neo_meeting.ogg","mus/spamton_neo_mix_ex_wip.ogg":"mus/spamton_neo_mix_ex_wip.ogg","mus/static_placeholder.ogg":"mus/static_placeholder.ogg","mus/statue2_level1.ogg":"mus/statue2_level1.ogg","mus/statue2_level2.ogg":"mus/statue2_level2.ogg","mus/statue2_level3.ogg":"mus/statue2_level3.ogg","mus/statue2_level4.ogg":"mus/statue2_level4.ogg","mus/statue2_level5.ogg":"mus/statue2_level5.ogg","mus/statue_chord_basic.ogg":"mus/statue_chord_basic.ogg","mus/statue_level1.ogg":"mus/statue_level1.ogg","mus/statue_level2.ogg":"mus/statue_level2.ogg","mus/statue_level3.ogg":"mus/statue_level3.ogg","mus/statue_level4.ogg":"mus/statue_level4.ogg","mus/stealth.ogg":"mus/stealth.ogg","mus/strongwind_loop.ogg":"mus/strongwind_loop.ogg","mus/susie_diner.ogg":"mus/susie_diner.ogg","mus/tenna_battle.ogg":"mus/tenna_battle.ogg","mus/tenna_battle_guitar.ogg":"mus/tenna_battle_guitar.ogg","mus/tenna_battle_old.ogg":"mus/tenna_battle_old.ogg","mus/tenna_battle_preview.ogg":"mus/tenna_battle_preview.ogg","mus/tenna_battle_preview_crisp.ogg":"mus/tenna_battle_preview_crisp.ogg","mus/tenna_island.ogg":"mus/tenna_island.ogg","mus/tense.ogg":"mus/tense.ogg","mus/the_dark_truth.ogg":"mus/the_dark_truth.ogg","mus/thrash_rating.ogg":"mus/thrash_rating.ogg","mus/thrashmachine.ogg":"mus/thrashmachine.ogg","mus/tin_night.ogg":"mus/tin_night.ogg","mus/tinnitus.ogg":"mus/tinnitus.ogg","mus/titan_battle.ogg":"mus/titan_battle.ogg","mus/titan_pre.ogg":"mus/titan_pre.ogg","mus/titan_spawn.ogg":"mus/titan_spawn.ogg","mus/titan_tower.ogg":"mus/titan_tower.ogg","mus/town.ogg":"mus/town.ogg","mus/town_day.ogg":"mus/town_day.ogg","mus/trank.ogg":"mus/trank.ogg","mus/tv_changingroom.ogg":"mus/tv_changingroom.ogg","mus/tv_hall_of_fame.ogg":"mus/tv_hall_of_fame.ogg","mus/tv_infrontof.ogg":"mus/tv_infrontof.ogg","mus/tv_noise.ogg":"mus/tv_noise.ogg","mus/tv_results_screen.ogg":"mus/tv_results_screen.ogg","mus/tv_static_bad.ogg":"mus/tv_static_bad.ogg","mus/tv_world.ogg":"mus/tv_world.ogg","mus/tvromance.ogg":"mus/tvromance.ogg","mus/vs_susie.ogg":"mus/vs_susie.ogg","mus/w.ogg":"mus/w.ogg","mus/wet_tapdancing.ogg":"mus/wet_tapdancing.ogg","mus/wet_tapdancing2.ogg":"mus/wet_tapdancing2.ogg","mus/wet_tapdancing_failed.ogg":"mus/wet_tapdancing_failed.ogg","mus/wind.ogg":"mus/wind.ogg","mus/wind_highplace.ogg":"mus/wind_highplace.ogg","mus_undynescary.ogg":"mus_undynescary.ogg","packindexfiles.py":"packindexfiles.py","packrunnerfiles.py":"packrunnerfiles.py","runner-sw.js":"runner-sw.js","runner.data.part1":"runner.data.part1","runner.data.part2":"runner.data.part2","runner.js":"runner.js","runner.json":"runner.json","runner.svg":"runner.svg","runner.wasm":"runner.wasm","runnerlocal.svg":"runnerLocal.svg","snd_bigcar_yelp.ogg":"snd_bigcar_yelp.ogg","snd_churchbell.ogg":"snd_churchbell.ogg","snd_closet_fall.ogg":"snd_closet_fall.ogg","snd_closet_impact.ogg":"snd_closet_impact.ogg","snd_dtrans_drone.ogg":"snd_dtrans_drone.ogg","snd_dtrans_flip.ogg":"snd_dtrans_flip.ogg","snd_dtrans_heavypassing.ogg":"snd_dtrans_heavypassing.ogg","snd_dtrans_lw.ogg":"snd_dtrans_lw.ogg","snd_dtrans_square.ogg":"snd_dtrans_square.ogg","snd_dtrans_twinkle.ogg":"snd_dtrans_twinkle.ogg","snd_fountain_make.ogg":"snd_fountain_make.ogg","snd_fountain_target.ogg":"snd_fountain_target.ogg","snd_ghostappear.ogg":"snd_ghostappear.ogg","snd_great_shine.ogg":"snd_great_shine.ogg","snd_him_quick.ogg":"snd_him_quick.ogg","snd_hitcar.ogg":"snd_hitcar.ogg","snd_hitcar_little.ogg":"snd_hitcar_little.ogg","snd_icespell.ogg":"snd_icespell.ogg","snd_paper_rumble.ogg":"snd_paper_rumble.ogg","snd_paper_surf.ogg":"snd_paper_surf.ogg","snd_revival.ogg":"snd_revival.ogg","snd_rurus_appear.ogg":"snd_rurus_appear.ogg","snd_smallcar_yelp.ogg":"snd_smallcar_yelp.ogg","snd_snowgrave.ogg":"snd_snowgrave.ogg","snd_spell_pacify.ogg":"snd_spell_pacify.ogg","snd_usefountain.ogg":"snd_usefountain.ogg","sw.js":"sw.js","vid/ch5_intro_en.mp4":"vid/ch5_intro_en.mp4","vid/ch5_intro_jp.mp4":"vid/ch5_intro_jp.mp4"};
+// Game data is hosted in parts beside this page; players need no local files.
+const EXPECTED_GAME_BYTES=250861504;
+const originalFetch=window.fetch.bind(window),localBase=new URL('https://cdn.jsdelivr.net/gh/sektanaymikon/dojo-plus-web-a@main/'),assetRoot=new URL('.',localBase);
+let gameObjectUrl=null,packageObjectUrl=null,started=false;
+const byId=id=>document.getElementById(id);
+const logError=message=>{byId('loading').hidden=false;byId('spinner').hidden=true;byId('status').textContent=message;byId('setupStatus').textContent=message;byId('output').value+='\n'+message;};
+function script(url){return new Promise((resolve,reject)=>{const el=document.createElement('script');el.src=url;el.onload=resolve;el.onerror=()=>reject(Error('Could not load '+url));document.body.append(el);});}
+function resourceUrl(input){
+ const text=String(input);if(/^(blob:|data:)/i.test(text))return text;
+ let u;try{u=new URL(text,localBase);}catch(_){return text;}
+ let path;try{path=decodeURIComponent(u.pathname).replace(/\\/g,'/');}catch(_){return text;}
+ const leaf=path.split('/').pop().toLowerCase();
+ if(leaf==='game.unx'&&gameObjectUrl)return gameObjectUrl;
+ if(leaf==='runner.data'&&packageObjectUrl)return packageObjectUrl;
+ if(leaf==='runner.wasm')return new URL('runner.wasm',assetRoot).href;
+ if(u.origin!==location.origin&&u.origin!==localBase.origin&&u.origin!=='null')return text;
+ const candidates=[path.replace(/^\/+/,''),path.split('/assets/').pop(),path.match(/(?:^|\/)((?:mus|vid|lang)\/.*)$/i)?.[1],leaf];
+ for(const key of candidates){const mapped=key&&ASSET_MAP[key.toLowerCase()];if(mapped)return PINNED_ASSET_BASE+mapped;}
+ return text;
+}
+function installResourceMapping(){
+ window.fetch=(input,options)=>{const text=typeof input==='string'||input instanceof URL?String(input):input.url,resolved=resourceUrl(text);return originalFetch(resolved===text?input:input instanceof Request?new Request(resolved,input):resolved,options);};
+ const nativeOpen=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...args){if(/(?:^|\/)mus\//i.test(String(url)))this.addEventListener('loadend',()=>window.finishCancelledMusicDownloads?.(),{once:true});return nativeOpen.call(this,method,resourceUrl(url),...args);};
+ const mediaSrc=Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,'src');if(mediaSrc?.set)Object.defineProperty(HTMLMediaElement.prototype,'src',{...mediaSrc,set(value){this.crossOrigin='anonymous';mediaSrc.set.call(this,resourceUrl(value));}});
+ const nativeAttribute=Element.prototype.setAttribute;Element.prototype.setAttribute=function(name,value){if((this instanceof HTMLMediaElement)&&String(name).toLowerCase()==='src')value=resourceUrl(value);return nativeAttribute.call(this,name,value);};
+}
+
+async function downloadFile(url,label,options){
+ const address=String(url),pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+ for(let attempt=0;attempt<3;attempt++){
+  let response;
+  try{response=await originalFetch(url,{...options,...(attempt?{cache:'reload'}:{})});}
+  catch(cause){if(attempt<2){await pause(500*(attempt+1));continue;}throw Error(label+' could not be downloaded.\nURL: '+address+'\nOriginal error: '+(cause.message||String(cause)));}
+  if(response.ok)return response;
+  if([403,408,429,500,502,503,504].includes(response.status)&&attempt<2){await response.body?.cancel();await pause(500*(attempt+1));continue;}
+  let detail='';try{detail=(await response.text()).replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim().slice(0,350);}catch(_){}
+  throw Error(label+' download was refused or unavailable (HTTP '+response.status+').\nURL: '+address+'\nServer response: '+(detail||'(no explanation returned)'));
+ }
+}
+
+async function downloadBytes(response,label){
+ try{return await response.arrayBuffer();}
+ catch(cause){throw Error(label+' was interrupted while downloading.\nURL: '+response.url+'\nOriginal error: '+(cause.message||String(cause)));}
+}
+
+async function packageData(){const response=await downloadFile(new URL('runner.data',assetRoot),'Runtime data');if(!response.ok)throw Error('Runtime data did not load ('+response.status+'). Upload the runtime files to the GitHub repository root.');return downloadBytes(response,'Runtime data');}
+
+const BROWSER_SHADER_PATCHES=[{"offset": 14207384, "before": "ffff0f84", "after": "0000029d", "name": "gml_Script_shader_replace_simple_reset_hook"}, {"offset": 14207480, "before": "faff05c3", "after": "0000029d", "name": "gml_Script_shader_replace_simple_set_hook"}, {"offset": 22082696, "before": "fbff05c2000000a000004507", "after": "00000f84000054070000059c", "name": "gml_Script_shader_replace_simple"}];
+async function browserCompatibleGame(game){
+ const segments=[];let cursor=0;
+ for(const patch of BROWSER_SHADER_PATCHES){
+  const original=new Uint8Array(await game.slice(patch.offset,patch.offset+patch.before.length/2).arrayBuffer());
+  const actual=Array.from(original,n=>n.toString(16).padStart(2,'0')).join('');
+  if(actual!==patch.before)throw Error('Game compatibility patch does not match this build: '+patch.name);
+  segments.push(game.slice(cursor,patch.offset));segments.push(new Uint8Array(patch.after.match(/../g).map(n=>parseInt(n,16))));cursor=patch.offset+original.length;
+ }
+ segments.push(game.slice(cursor));return new Blob(segments,{type:'application/octet-stream'});
+}
+function installWebShaderCompatibility(){
+ const proto=globalThis.WebGLRenderingContext?.prototype;if(!proto||proto.__rombiesShaderCompatibility)return;
+ const original=proto.shaderSource;
+ proto.shaderSource=function(shader,source){
+  let serial=0;
+  source=source.replace(/for\s*\(\s*float\s+([A-Za-z_]\w*)\s*=\s*([^;]+);\s*\1\s*(<=|<)\s*([^;]+);\s*\1\s*(?:\+=\s*([^)]*)|(\+\+))\s*\)\s*\{/g,(whole,name,start,comparison,end,step)=>{
+   if(!/blur_radius|paletteHeight|u_Uvs\.w|sample_count/.test(end))return whole;
+   const counter='webCompatLoop'+serial++;step=(step||'1.0').trim();
+   return 'for (int '+counter+' = 0; '+counter+' < 1024; '+counter+'++) { float '+name+' = ('+start.trim()+') + float('+counter+') * ('+step+'); if (!('+name+' '+comparison+' ('+end.trim()+'))) break;';
+  });
+  return original.call(this,shader,source);
+ };proto.__rombiesShaderCompatibility=true;
+}
+
+async function hostedGame(){
+ byId('status').textContent='Loading game manifest…';
+ const response=await downloadFile(new URL('manifest.json',localBase),'Game manifest',{cache:'no-cache'});
+ if(!response.ok)throw Error('Game manifest is missing. Upload all extracted package files to the root of your Dojo+ hosting folder.');
+ let manifest;try{manifest=await response.json();}catch(_){throw Error('The manifest response is not JSON. Check the GitHub upload and CDN URL.');}
+ if(manifest.bytes!==EXPECTED_GAME_BYTES||!Array.isArray(manifest.parts)||!manifest.parts.length)throw Error('The hosted game manifest does not match this mod build.');
+ const chunks=[];let loaded=0;
+ for(let i=0;i<manifest.parts.length;i++){
+  const part=manifest.parts[i];byId('status').textContent='Downloading game: part '+(i+1)+' / '+manifest.parts.length+' · '+Math.round(100*loaded/manifest.bytes)+'%';
+  const item=await downloadFile(new URL(part.path,localBase),'Game part '+(i+1)+' / '+manifest.parts.length);
+  if(!item.ok)throw Error('Game part '+(i+1)+' could not be downloaded (HTTP '+item.status+'). Check the server response and URL.');
+  let bytes=await downloadBytes(item,'Game part '+(i+1)+' / '+manifest.parts.length);
+  if(part.encoding==='gzip'){
+   if(bytes.byteLength!==part.compressedBytes)throw Error('Compressed game part '+(i+1)+' has the wrong size. Check the GitHub upload.');
+   if(crypto.subtle){const hash=await crypto.subtle.digest('SHA-256',bytes),hex=Array.from(new Uint8Array(hash),n=>n.toString(16).padStart(2,'0')).join('');if(hex!==part.compressedSha256)throw Error('Compressed game part '+(i+1)+' failed its integrity check.');}
+   if(typeof DecompressionStream!=='function')throw Error('This browser needs an update to a version that supports DecompressionStream for gzip files.');
+   bytes=await new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))).arrayBuffer();
+  }
+  if(bytes.byteLength!==part.bytes)throw Error('Game part '+(i+1)+' has the wrong size. Check that all files uploaded successfully.');
+  if(crypto.subtle){const digest=await crypto.subtle.digest('SHA-256',bytes);const hex=Array.from(new Uint8Array(digest),n=>n.toString(16).padStart(2,'0')).join('');if(hex!==part.sha256)throw Error('Game part '+(i+1)+' failed its integrity check. Please reload the page.');}
+  chunks.push(bytes);loaded+=bytes.byteLength;
+ }
+ const game=new Blob(chunks,{type:'application/octet-stream'});chunks.length=0;if(game.size!==EXPECTED_GAME_BYTES)throw Error('The game download is incomplete.');return game;
+}
+byId('start').onclick=async()=>{
+ if(started)return;const button=byId('start');
+ button.disabled=true;byId('loading').hidden=false;byId('status').textContent='Preparing game…';
+ try{
+  const game=await browserCompatibleGame(await hostedGame());
+  installWebShaderCompatibility();
+  if(await game.slice(0,4).text()!=='FORM')throw Error('The selected response is not GameMaker game data.');
+  const packageBytes=await packageData();gameObjectUrl=URL.createObjectURL(game);packageObjectUrl=URL.createObjectURL(new Blob([packageBytes]));installResourceMapping();
+  await script(new URL('index.js',assetRoot).href);
+// A saved fullscreen display size must not become the game's display ratio.
+(() => {
+ const canvas=document.getElementById('canvas'),aspect=4/3;let pending=false;
+ function fit(){
+  pending=false;if(!canvas)return;
+  const availableWidth=Math.max(1,window.innerWidth),availableHeight=Math.max(1,window.innerHeight);
+  const width=Math.floor(Math.min(availableWidth,availableHeight*aspect)),height=Math.floor(width/aspect);
+  canvas.classList.add('active');
+  for(const [key,value] of Object.entries({width:width+'px',height:height+'px','max-width':'none','max-height':'none'})){
+   if(canvas.style.getPropertyValue(key)!==value||canvas.style.getPropertyPriority(key)!=='important')canvas.style.setProperty(key,value,'important');
+  }
+ }
+ function schedule(){if(!pending){pending=true;requestAnimationFrame(fit);}}
+ window.startingWidth=640;window.startingHeight=480;window.startingAspect=aspect;
+ window.ensureAspectRatio=fit;
+ window.onGameSetWindowSize=()=>{window.startingWidth=640;window.startingHeight=480;window.startingAspect=aspect;schedule();};
+ for(const key of ['onFullscreen','onFullScreen']){const old=Module[key];Module[key]=(...args)=>{old?.(...args);schedule();};}
+ window.addEventListener('resize',schedule);window.visualViewport?.addEventListener('resize',schedule);
+ document.addEventListener('fullscreenchange',()=>{schedule();setTimeout(fit,100);setTimeout(fit,350);});
+ // Fullscreen the page so the browser does not force the canvas itself to 16:9.
+ const request=document.documentElement.requestFullscreen?.bind(document.documentElement);
+ if(request)canvas.requestFullscreen=(...args)=>{
+  try{return Promise.resolve(request(...args)).catch(error=>{schedule();console.warn('[display] Fullscreen request was declined; keeping the game fitted in the page.',error.message);});}
+  catch(error){schedule();console.warn('[display] Fullscreen unavailable.',error.message);return Promise.resolve();}
+ };
+ new MutationObserver(schedule).observe(canvas,{attributes:true,attributeFilter:['style','width','height']});
+ fit();console.log('[display] Fixed 4:3 fullscreen fitting installed.');
+})();
+
+  // The web runner's file catalogue is case sensitive; Windows game paths are not.
+  // Register both spellings and retain URL mapping to the repository's real case.
+  const names=window.manifestFiles().split(';'),hashes=window.manifestFilesMD5();
+  for(let i=0,count=names.length;i<count;i++){const alias=names[i].toLowerCase();if(!names.includes(alias)){names.push(alias);hashes.push(hashes[i]);}}
+  window.manifestFiles=()=>names.join(';');window.manifestFilesMD5=()=>hashes.slice();
+  // Use the selected mod file, not the unmodified game chunks in the upstream port.
+  Module.locateFile=path=>resourceUrl(path);
+  Module.getPreloadedPackage=()=>packageBytes;
+  const nativePrintErr=Module.printErr;Module.printErr=(...args)=>{nativePrintErr(...args);byId('output').value+='\n'+args.join(' ');};
+  const nativePrint=Module.print;Module.print=(...args)=>{nativePrint(...args);if(args.join(' ').includes('Entering main loop.')){window.installGameMusicCleanup?.();byId('loading').hidden=true;byId('canvas').focus();}};
+  Module.onAbort=message=>logError('The web runner stopped: '+message+'\nCopy the game log when reporting this error.');
+  window.addEventListener('error',event=>logError('Browser error: '+(event.error?.stack||event.message)));window.addEventListener('unhandledrejection',event=>logError('Loading error: '+(event.reason?.stack||event.reason?.message||event.reason)));
+  document.body.classList.add('running');started=true;await script(new URL('runner.js',assetRoot).href);byId('canvas').focus();
+ }catch(e){logError(e.message||String(e));if(!started)button.disabled=false;}
+};
+// Import/export of the web port's JSON .data saves. Runs before the game mounts IDBFS.
+(() => {
+ 'use strict';
+ const DB='/_savedata',STORE='FILE_DATA',VERSION=21,MAX=25*1024*1024;
+ let pending=[],busy=false;
+ const dialog=byId('saveDialog'),message=byId('saveMessage'),list=byId('saveList'),apply=byId('applySave');
+ const text=value=>{message.textContent=value;};
+ const request=r=>new Promise((resolve,reject)=>{r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
+ function openDb(){return new Promise((resolve,reject)=>{const r=indexedDB.open(DB,VERSION);r.onupgradeneeded=()=>{const db=r.result,store=db.objectStoreNames.contains(STORE)?r.transaction.objectStore(STORE):db.createObjectStore(STORE);if(!store.indexNames.contains('timestamp'))store.createIndex('timestamp','timestamp',{unique:false});};r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);r.onblocked=()=>reject(Error('Close other copies of this game and try again.'));});}
+ function done(tx){return new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error||Error('Save operation cancelled.'));tx.onerror=()=>reject(tx.error);});}
+ function canonicalKey(key){if(typeof key!=='string')return null;const name=key.replace(/\\/g,'/').split('/').pop();return /^(?:filech[1-5]_\d{1,2}(?:_\d+)?|dr\.ini|true_config\.ini|decomp_vars\.ini|trophies\.ini|(?:key)?config_\d+\.ini)$/i.test(name)?'/_savedata/'+name:null;}
+ function bytesOf(value){
+  if(value instanceof ArrayBuffer)return new Uint8Array(value);
+  if(ArrayBuffer.isView(value))return new Uint8Array(value.buffer,value.byteOffset,value.byteLength);
+  if(Array.isArray(value)){if(value.some(n=>!Number.isInteger(n)||n< -128||n>255))throw Error('Invalid bytes in the save file.');return new Uint8Array(value);}
+  if(value&&typeof value==='object'){
+   if(['TypedArray','ArrayBuffer','Uint8Array','Int8Array','Buffer'].includes(value.__type||value.type)){
+    if(Array.isArray(value.data))return bytesOf(value.data);
+    if(typeof value.data==='string'){const s=atob(value.data);return Uint8Array.from(s,c=>c.charCodeAt(0));}
+   }
+   const keys=Object.keys(value);if(keys.length&&keys.every(k=>/^\d+$/.test(k))){keys.sort((a,b)=>Number(a)-Number(b));if(keys.some((k,i)=>Number(k)!==i))throw Error('Incomplete byte array in the save.');return bytesOf(keys.map(k=>value[k]));}
+  }
+  throw Error('This save uses an unsupported contents encoding. Please send the .data file so its format can be checked.');
+ }
+ function parseSave(raw){
+  let data;try{data=JSON.parse(raw);}catch(_){throw Error('This is not a JSON .data save exported by the web port. A raw PC save or a different export format needs conversion.');}
+  const records=[];
+  if(Array.isArray(data.indexedDB)){
+   for(const db of data.indexedDB){if(!Array.isArray(db?.stores))continue;for(const store of db.stores){if(store?.name!==STORE||!Array.isArray(store.records))continue;records.push(...store.records);}}
+  }else if(data.format==='deltarune-mod-save'&&Array.isArray(data.records))records.push(...data.records);
+  else if(Array.isArray(data))records.push(...data);
+  const result=new Map();let total=0;
+  for(const record of records){const key=canonicalKey(record?.key??record?.name);if(!key)continue;const value=record.value??record.data;if(!value||!Object.hasOwn(value,'contents'))continue;if(value.mode&&((value.mode&61440)!==32768))continue;const contents=bytesOf(value.contents);total+=contents.byteLength;if(total>MAX)throw Error('The decoded save exceeds the 25 MB save limit.');result.set(key,{timestamp:new Date(),mode:33206,contents:new Uint8Array(contents)});}
+  if(!result.size)throw Error('No Deltarune save records were found in this .data file. Export the save from the web port, or send this file so its format can be checked.');
+  if(result.size>200)throw Error('This export contains too many save records. Export only your Deltarune saves.');
+  return [...result].map(([key,value])=>({key,value}));
+ }
+ async function readAll(){const db=await openDb();try{const tx=db.transaction(STORE,'readonly'),store=tx.objectStore(STORE),finished=done(tx),keys=request(store.getAllKeys()),values=request(store.getAll());const [k,v]=await Promise.all([keys,values]);await finished;return k.map((key,i)=>({key,value:v[i]})).filter(r=>canonicalKey(r.key));}finally{db.close();}}
+ async function backup(records){
+  if(!records.length)return;
+  const db=await new Promise((resolve,reject)=>{const r=indexedDB.open('deltarune-mod-save-backups',1);r.onupgradeneeded=()=>r.result.createObjectStore('backups');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});
+  try{const tx=db.transaction('backups','readwrite'),finished=done(tx),store=tx.objectStore('backups');store.put({createdAt:new Date(),records},Date.now());const r=store.getAllKeys();r.onsuccess=()=>{for(const key of r.result.slice(0,-3))store.delete(key);};await finished;}finally{db.close();}
+ }
+ function base64(bytes){let value='';for(let i=0;i<bytes.length;i+=32768)value+=String.fromCharCode(...bytes.subarray(i,i+32768));return btoa(value);}
+ function download(records,label){const data={format:'deltarune-snxtr-save',version:3,scope:'deltarune',exportedAt:new Date().toISOString(),localStorage:{},cookies:'',indexedDB:[{name:DB,version:VERSION,stores:[{name:STORE,keyPath:null,autoIncrement:false,indexes:[{name:'timestamp',keyPath:'timestamp',unique:false}],records:records.map(({key,value})=>({key,value:{timestamp:{__type:'Date',data:new Date(value.timestamp||Date.now()).toISOString()},mode:33206,contents:{__type:'TypedArray',name:'Uint8Array',data:base64(bytesOf(value.contents))}}}))}]}]};const url=URL.createObjectURL(new Blob([JSON.stringify(data)],{type:'application/json'})),a=document.createElement('a');a.href=url;a.download='deltarune-'+label+'-'+Date.now()+'.data';a.click();setTimeout(()=>URL.revokeObjectURL(url),60000);}
+ function openManager(){pending=[];apply.disabled=true;list.replaceChildren();text(started||byId('start').disabled?'To import a save, reload the page and open Saves before pressing Play. Export downloads the last progress saved to browser storage.':'Choose a .data export. Only the listed Deltarune files will be replaced; other saved slots stay unchanged.');byId('chooseSave').disabled=started||byId('start').disabled;dialog.showModal();}
+ byId('openSaves').onclick=openManager;
+ byId('closeSaves').onclick=()=>{if(!busy)dialog.close();};
+ dialog.addEventListener('cancel',e=>{if(busy)e.preventDefault();});
+ byId('chooseSave').onclick=()=>byId('saveFile').click();
+ byId('saveFile').onchange=async event=>{const file=event.target.files[0];if(!file)return;pending=[];apply.disabled=true;list.replaceChildren();try{if(file.size>MAX)throw Error('Choose a save export smaller than 25 MB.');const found=parseSave(await file.text());if(started||byId('start').disabled)throw Error('Reload the game and import before pressing Play.');pending=found;for(const item of pending){const line=document.createElement('li');line.textContent=item.key.split('/').pop()+' — '+item.value.contents.byteLength+' bytes';list.append(line);}text('Found '+pending.length+' save files. Import replaces matching files and keeps a local backup.');apply.disabled=false;}catch(e){text(e.message||String(e));}finally{event.target.value='';}};
+ apply.onclick=async()=>{
+  if(busy||!pending.length||started||byId('start').disabled)return;
+  busy=true;apply.disabled=true;byId('chooseSave').disabled=true;byId('start').disabled=true;byId('closeSaves').disabled=true;text('Backing up and importing…');
+  try{const previous=await readAll(),keys=new Set(pending.map(r=>r.key));await backup(previous.filter(r=>keys.has(r.key)));const db=await openDb();try{const tx=db.transaction(STORE,'readwrite'),finished=done(tx),store=tx.objectStore(STORE);for(const r of pending)store.put(r.value,r.key);await finished;}finally{db.close();}text('Imported '+pending.length+' save files. Close this window, press Play, then choose Continue or the corresponding chapter/slot in the game.');pending=[];byId('setupStatus').textContent='Save imported. Press Play to load it.';}catch(e){text('Import failed: '+(e.message||e));apply.disabled=!pending.length;}finally{busy=false;byId('chooseSave').disabled=false;byId('start').disabled=false;byId('closeSaves').disabled=false;}
+ };
+ byId('exportSave').onclick=async()=>{try{const records=await readAll();if(!records.length)throw Error('No saved progress was found in this browser yet.');download(records,'save');text('Save exported.');}catch(e){text(e.message||String(e));}};
+ byId('exportBackup').onclick=async()=>{let db;try{db=await new Promise((resolve,reject)=>{const r=indexedDB.open('deltarune-mod-save-backups',1);r.onupgradeneeded=()=>r.result.createObjectStore('backups');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});const tx=db.transaction('backups','readonly'),finished=done(tx),values=await request(tx.objectStore('backups').getAll());await finished;if(!values.length)throw Error('No overwritten saves have been backed up yet.');download(values.at(-1).records,'pre-import-backup');text('Previous save backup exported. You can import it before starting the game.');}catch(e){text(e.message||String(e));}finally{db?.close();}};
+})();
+
+byId('showLog').onclick=()=>{byId('output-container').hidden=!byId('output-container').hidden;};
+byId('full').onclick=async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen();}catch(_){logError('This embed blocks fullscreen. Open the hosted game directly for fullscreen.');}};
+byId('canvas').addEventListener('pointerdown',()=>byId('canvas').focus());
+
+</script></body></html>
