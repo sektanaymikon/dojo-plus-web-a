@@ -22,7 +22,7 @@
   const input=document.createElement('input');input.type='checkbox';input.id='dojoAllRecruits';input.style.cssText='width:auto;margin:0;padding:0';box.append(input,document.createTextNode('All recruits (Chapter 5)'));document.querySelector('.toolbar').append(box);
   const status=document.createElement('span');status.id='recruitStatus';status.style.cssText='color:#bfe5ce;font:12px system-ui;background:#111b2de8;padding:7px;border-radius:6px';status.hidden=true;document.querySelector('.toolbar').append(status);
   input.onchange=()=>{enabled=input.checked;status.hidden=false;status.textContent=enabled?'Load a Chapter 5 file to enable all recruits.':'Disabled. Reload your saved game to undo unsaved unlocks.';};
-  setInterval(()=>{if(!enabled||!instance)return;try{api??=nativeApi();const result=api.unlock();status.textContent=result.waiting?'Waiting for a Chapter 5 file…':'Recruits ready: '+result.count+' / '+result.total+'. Save in-game to keep them.';}catch(e){enabled=false;input.checked=false;status.textContent='Recruit option unavailable: '+e.message;console.error('[recruits]',e);}},1000);
+  setInterval(()=>{if(!enabled||!instance||typeof window.getGameMusicState!=='function')return;try{api??=nativeApi();const result=api.unlock();status.textContent=result.waiting?'Waiting for a Chapter 5 file…':'Recruits ready: '+result.count+' / '+result.total+'. Save in-game to keep them.';}catch(e){enabled=false;input.checked=false;status.textContent='Recruit option unavailable: '+e.message;console.error('[recruits]',e);}},1000);
  }
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',setup);else setup();
 })();
