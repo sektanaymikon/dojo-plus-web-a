@@ -51,7 +51,7 @@
    callback(scratch,0,0,values.length,scratch+16);return number(scratch);
   }
   function string(pointer){
-   try{const d=new DataView(memory.buffer);if(d.getInt32(pointer+12,true)!==1)return '';const ref=d.getUint32(pointer,true),start=d.getUint32(ref,true),length=Math.min(d.getUint32(ref+8,true),1024);return new TextDecoder().decode(new Uint8Array(memory.buffer,start,length)).toLowerCase();}catch(_){return '';}
+   try{const d=new DataView(memory.buffer);if(d.getInt32(pointer+12,true)!==1)return '';const ref=d.getUint32(pointer,true),start=d.getUint32(ref,true),length=Math.min(d.getUint32(ref+8,true),1024);return new TextDecoder().decode(new Uint8Array(memory.buffer,start,length)).split('\0',1)[0].replace(/\\/g,'/').trim().toLowerCase();}catch(_){return '';}
   }
   function silenceDefaultMusic(){
    if(!gain)return;
@@ -113,7 +113,7 @@
   }));
   table.set(slots.stopAll,typedCallback((...args)=>{native.stopAll(...args);for(const voice of voices.keys())cancelPendingVoice(voice);voices.clear();for(const set of streams.values())set.clear();}));
   console.log('[music] Voice cleanup installed. Original play arguments and track filenames are preserved.');
-  console.log(gain?'[music] Boss music guard v2 installed (gain callback '+gain.index+').':'[music] Boss music guard unavailable: native gain callback not found.');
+  console.log(gain?'[music] Boss music guard v3 installed (padded filenames supported; gain callback '+gain.index+').':'[music] Boss music guard unavailable: native gain callback not found.');
   window.getGameMusicState=()=>[...music].map(([asset,record])=>({asset,name:record.name,generic:record.generic,suppressed:record.suppressed,gain:getGain?numericCall(getGain.callback,[asset]):null,voices:[...record.voices]}));
   return result;
  }
@@ -341,4 +341,4 @@ byId('showLog').onclick=()=>{byId('output-container').hidden=!byId('output-conta
 byId('full').onclick=async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen();}catch(_){logError('This embed blocks fullscreen. Open the hosted game directly for fullscreen.');}};
 byId('canvas').addEventListener('pointerdown',()=>byId('canvas').focus());
 
-</script></body></html>
+</script><script>script(new URL('port-credit.js',localBase).href).catch(console.warn);</script><script>script(new URL('dojo-recruits.js',localBase).href).catch(console.warn);</script></body></html>
