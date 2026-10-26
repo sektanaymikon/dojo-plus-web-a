@@ -32,7 +32,7 @@
   const memory=Object.values(instance.exports).find(x=>x instanceof WebAssembly.Memory),table=Object.values(instance.exports).find(x=>x instanceof WebAssembly.Table);
   if(!memory||!table)return result;
   if(fingerprint!==expectedHash||table.length!==5691){console.warn('[music] Runner fingerprint differs; compatibility hook was not applied.');return result;}
-  const slots={play:1417,stop:1421,create:1501,destroy:1502,stopAll:1446},native={};
+  const slots={play:1417,stop:1421,create:1501,destroy:1502,stopAll:1446,isPlaying:1426},native={};
   for(const [key,index] of Object.entries(slots)){native[key]=table.get(index);if(native[key]?.length!==5){console.warn('[music] Unexpected native audio signature; compatibility hook was not applied.');return result;}}
   attached.add(instance);
   const streams=new Map(),voices=new Map();
@@ -52,6 +52,12 @@
   }
   function string(pointer){
    try{const d=new DataView(memory.buffer);if(d.getInt32(pointer+12,true)!==1)return '';const ref=d.getUint32(pointer,true),start=d.getUint32(ref,true),length=Math.min(d.getUint32(ref+8,true),1024);return new TextDecoder().decode(new Uint8Array(memory.buffer,start,length)).split('\0',1)[0].replace(/\\/g,'/').trim().toLowerCase();}catch(_){return '';}
+  }
+  let selectedTheme=null;
+  function themeActive(){
+   if(!selectedTheme||music.get(selectedTheme.asset)!==selectedTheme)return false;
+   for(const voice of selectedTheme.voices)if(voices.has(voice)&&!cancelled.has(voice)&&(numericCall(native.isPlaying,[voice])===1||performance.now()-selectedTheme.startedAt<30000))return true;
+   return false;
   }
   function silenceDefaultMusic(){
    if(!gain)return;
@@ -85,7 +91,7 @@
    for(const voice of cancelled)for(const delay of [0,50,200,500,1000])setTimeout(()=>stopCancelledVoice(voice),delay);
   };
   function number(pointer){if(!pointer||pointer+16>memory.buffer.byteLength)return NaN;const d=new DataView(memory.buffer),type=d.getInt32(pointer+12,true);if(type===0||type===13)return d.getFloat64(pointer,true);if(type===7)return d.getInt32(pointer,true);if(type===10)return Number(d.getBigInt64(pointer,true));return NaN;}
-  function forget(voice){const stream=voices.get(voice);if(stream!==undefined)streams.get(stream)?.delete(voice);voices.delete(voice);}
+  function forget(voice){const stream=voices.get(voice);if(stream!==undefined)streams.get(stream)?.delete(voice);musicVoices.get(voice)?.voices.delete(voice);musicVoices.delete(voice);voices.delete(voice);}
   function stopVoice(voice,args){
    const pointer=args[4];if(!pointer||args[3]<1)return;
    const saved=new Uint8Array(memory.buffer,pointer,16).slice();
@@ -95,10 +101,14 @@
   table.set(slots.create,typedCallback((...args)=>{const name=string(args[4]);native.create(...args);const asset=number(args[0]);if(Number.isFinite(asset)&&asset>=0){streams.set(asset,new Set());music.set(asset,{asset,name,generic:/(?:^|\/)(?:rakuichi_buster_wip|battle)\.ogg$/.test(name),suppressed:false,desiredGain:1,voices:new Set()});}}));
   table.set(slots.play,typedCallback((...args)=>{
    const asset=number(args[4]),record=music.get(asset),priority=number(args[4]+16);
-   if(record?.generic&&record.suppressed&&gain){record.suppressed=false;numericCall(gain.callback,[asset,Number.isFinite(record.desiredGain)?record.desiredGain:1,0]);}
-   else if(record&&!record.generic&&priority>=80)silenceDefaultMusic();
+   // Some battle controllers restart the default stream AFTER the boss starts.
+   // Do not let that late play undo the boss's suppression.
+   const blockDefault=record?.generic&&themeActive();
+   if(record?.generic&&record.suppressed&&!blockDefault&&gain){record.suppressed=false;numericCall(gain.callback,[asset,Number.isFinite(record.desiredGain)?record.desiredGain:1,0]);}
+   else if(record&&!record.generic&&priority>=80){selectedTheme=record;record.startedAt=performance.now();silenceDefaultMusic();}
    native.play(...args);const voice=number(args[0]);
    if(streams.has(asset)&&Number.isFinite(voice)&&voice>=0){streams.get(asset).add(voice);voices.set(voice,asset);record?.voices.add(voice);if(record)musicVoices.set(voice,record);}
+   if(blockDefault){record.suppressed=true;if(gain){numericCall(gain.callback,[asset,0,0]);numericCall(gain.callback,[voice,0,0]);}numericCall(native.stop,[voice]);cancelPendingVoice(voice);}
   }));
   table.set(slots.stop,typedCallback((...args)=>{
    const handle=number(args[4]);native.stop(...args);
@@ -111,9 +121,9 @@
    native.destroy(...args);streams.delete(asset);const record=music.get(asset);if(record)for(const voice of record.voices)musicVoices.delete(voice);music.delete(asset);
    if(active.length)console.log('[music] Released stream '+asset+' after stopping '+active.length+' tracked voice(s).');
   }));
-  table.set(slots.stopAll,typedCallback((...args)=>{native.stopAll(...args);for(const voice of voices.keys())cancelPendingVoice(voice);voices.clear();for(const set of streams.values())set.clear();}));
+  table.set(slots.stopAll,typedCallback((...args)=>{native.stopAll(...args);for(const voice of [...voices.keys()]){cancelPendingVoice(voice);forget(voice);}selectedTheme=null;for(const set of streams.values())set.clear();}));
   console.log('[music] Voice cleanup installed. Original play arguments and track filenames are preserved.');
-  console.log(gain?'[music] Boss music guard v3 installed (padded filenames supported; gain callback '+gain.index+').':'[music] Boss music guard unavailable: native gain callback not found.');
+  console.log(gain?'[music] Boss music guard v4 installed (late default restarts blocked; gain callback '+gain.index+').':'[music] Boss music guard unavailable: native gain callback not found.');
   window.getGameMusicState=()=>[...music].map(([asset,record])=>({asset,name:record.name,generic:record.generic,suppressed:record.suppressed,gain:getGain?numericCall(getGain.callback,[asset]):null,voices:[...record.voices]}));
   return result;
  }
